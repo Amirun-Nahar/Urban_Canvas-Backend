@@ -37,9 +37,9 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/payment', paymentRoutes);
 
 // Connect to MongoDB
-const mongoURI = process.env.MONGODB_URI;
+const mongoURI = process.env.MONGO_URI;
 if (!mongoURI) {
-  console.error('MONGODB_URI environment variable is not set!');
+  console.error('MONGO_URI environment variable is not set!');
   process.exit(1);
 }
 

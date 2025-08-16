@@ -14,11 +14,14 @@ router.get('/statistics', async (req, res) => {
     const totalProperties = await Property.countDocuments();
     const verifiedProperties = await Property.countDocuments({ verificationStatus: 'verified' });
     const advertisedProperties = await Property.countDocuments({ isAdvertised: true });
+    const pendingProperties = await Property.countDocuments({ verificationStatus: 'pending' });
+    const rejectedProperties = await Property.countDocuments({ verificationStatus: 'rejected' });
     
     // Get total users
     const totalUsers = await User.countDocuments();
     const totalAgents = await User.countDocuments({ role: 'agent' });
     const totalAdmins = await User.countDocuments({ role: 'admin' });
+    const regularUsers = await User.countDocuments({ role: 'user' });
     
     // Get total wishlist items
     const totalWishlistItems = await Wishlist.countDocuments();
@@ -26,12 +29,39 @@ router.get('/statistics', async (req, res) => {
     // Get total reviews
     const totalReviews = await Review.countDocuments();
     
-    // Get total sold properties (offers with status 'completed')
-    const totalSoldProperties = await Offer.countDocuments({ status: 'completed' });
-    
-    // Calculate total sales amount
-    const soldOffers = await Offer.find({ status: 'completed' });
+         // Get total sold properties and offers statistics
+     const totalSoldProperties = await Offer.countDocuments({ status: 'bought' });
+     const pendingOffers = await Offer.countDocuments({ status: 'pending' });
+     const acceptedOffers = await Offer.countDocuments({ status: 'accepted' });
+     const rejectedOffers = await Offer.countDocuments({ status: 'rejected' });
+     
+     // Calculate total sales amount and get detailed sales data
+     const soldOffers = await Offer.find({ status: 'bought' }).populate('propertyId', 'title price priceRange');
     const totalSalesAmount = soldOffers.reduce((total, offer) => total + (offer.offeredAmount || 0), 0);
+    
+    // Get unique properties that have been sold (to avoid counting multiple offers on same property)
+    const soldPropertyIds = [...new Set(soldOffers.map(offer => offer.propertyId?._id?.toString()).filter(Boolean))];
+    const uniqueSoldProperties = soldPropertyIds.length;
+    
+    // Calculate average sale price
+    const averageSalePrice = soldOffers.length > 0 ? totalSalesAmount / soldOffers.length : 0;
+    
+         // Get today's sales
+     const today = new Date();
+     today.setHours(0, 0, 0, 0);
+     const newSalesToday = await Offer.countDocuments({ 
+       status: 'bought', 
+       createdAt: { $gte: today } 
+     });
+     
+     // Get this month's sales
+     const currentMonthStart = new Date();
+     currentMonthStart.setDate(1);
+     currentMonthStart.setHours(0, 0, 0, 0);
+     const newSalesThisMonth = await Offer.countDocuments({ 
+       status: 'bought', 
+       createdAt: { $gte: currentMonthStart } 
+     });
     
     // Get average property price
     const allProperties = await Property.find({ verificationStatus: 'verified' });
@@ -45,18 +75,74 @@ router.get('/statistics', async (req, res) => {
     }, 0);
     const averagePropertyPrice = allProperties.length > 0 ? totalPropertyValue / allProperties.length : 0;
     
+    // Get recent activity counts (last 24 hours)
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const newPropertiesToday = await Property.countDocuments({ createdAt: { $gte: oneDayAgo } });
+    const newUsersToday = await User.countDocuments({ createdAt: { $gte: oneDayAgo } });
+    const newReviewsToday = await Review.countDocuments({ reviewTime: { $gte: oneDayAgo } });
+    const newOffersToday = await Offer.countDocuments({ createdAt: { $gte: oneDayAgo } });
+    
+    // Get monthly trends (last 6 months)
+    const sixMonthsAgo = new Date(Date.now() - 6 * 30 * 24 * 60 * 60 * 1000);
+    const monthlyProperties = [];
+    const monthlyUsers = [];
+    const monthlyRevenue = [];
+    
+    for (let i = 5; i >= 0; i--) {
+      const monthStart = new Date(Date.now() - i * 30 * 24 * 60 * 60 * 1000);
+      const monthEnd = new Date(Date.now() - (i - 1) * 30 * 24 * 60 * 60 * 1000);
+      
+      const propertiesCount = await Property.countDocuments({
+        createdAt: { $gte: monthStart, $lt: monthEnd }
+      });
+      
+      const usersCount = await User.countDocuments({
+        createdAt: { $gte: monthStart, $lt: monthEnd }
+      });
+      
+             const monthOffers = await Offer.find({
+         status: 'bought',
+         createdAt: { $gte: monthStart, $lt: monthEnd }
+       });
+      const monthRevenue = monthOffers.reduce((total, offer) => total + (offer.offeredAmount || 0), 0);
+      
+      monthlyProperties.push(propertiesCount);
+      monthlyUsers.push(usersCount);
+      monthlyRevenue.push(monthRevenue);
+    }
+    
     const statistics = {
       totalProperties,
       verifiedProperties,
       advertisedProperties,
+      pendingProperties,
+      rejectedProperties,
       totalUsers,
       totalAgents,
       totalAdmins,
+      regularUsers,
       totalWishlistItems,
       totalReviews,
+      // Sales and offers statistics
       totalSoldProperties,
+      uniqueSoldProperties,
+      pendingOffers,
+      acceptedOffers,
+      rejectedOffers,
       totalSalesAmount,
-      averagePropertyPrice
+      averageSalePrice,
+      newSalesToday,
+      newSalesThisMonth,
+      averagePropertyPrice,
+      // Recent activity
+      newPropertiesToday,
+      newUsersToday,
+      newReviewsToday,
+      newOffersToday,
+      // Monthly trends
+      monthlyProperties,
+      monthlyUsers,
+      monthlyRevenue
     };
     
     res.json(statistics);
@@ -65,6 +151,68 @@ router.get('/statistics', async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
+
+// Get real-time statistics for dashboard (lightweight version)
+router.get('/statistics/realtime', async (req, res) => {
+  try {
+    // Get only essential counts for real-time updates
+    const totalProperties = await Property.countDocuments();
+    const verifiedProperties = await Property.countDocuments({ verificationStatus: 'verified' });
+    const totalUsers = await User.countDocuments();
+    const totalWishlistItems = await Wishlist.countDocuments();
+    const totalReviews = await Review.countDocuments();
+         const totalSoldProperties = await Offer.countDocuments({ status: 'bought' });
+     
+     // Get today's activity
+     const today = new Date();
+     today.setHours(0, 0, 0, 0);
+     const newPropertiesToday = await Property.countDocuments({ createdAt: { $gte: today } });
+     const newUsersToday = await User.countDocuments({ createdAt: { $gte: today } });
+     const newReviewsToday = await Review.countDocuments({ reviewTime: { $gte: today } });
+     const newSalesToday = await Offer.countDocuments({ 
+       status: 'bought', 
+       createdAt: { $gte: today } 
+     });
+    
+    const realtimeStats = {
+      totalProperties,
+      verifiedProperties,
+      totalUsers,
+      totalWishlistItems,
+      totalReviews,
+      totalSoldProperties,
+      newPropertiesToday,
+      newUsersToday,
+      newReviewsToday,
+      newSalesToday,
+      lastUpdated: new Date().toISOString()
+    };
+    
+         res.json(realtimeStats);
+   } catch (error) {
+     console.error('Get real-time statistics error:', error);
+     res.status(500).json({ message: 'Server error' });
+   }
+ });
+
+// Debug endpoint to check offers data (remove in production)
+router.get('/debug/offers', async (req, res) => {
+  try {
+    const allOffers = await Offer.find().select('status offeredAmount createdAt propertyId');
+    const statusCounts = await Offer.aggregate([
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]);
+    
+    res.json({
+      totalOffers: allOffers.length,
+      statusCounts,
+      sampleOffers: allOffers.slice(0, 5)
+    });
+  } catch (error) {
+    console.error('Debug offers error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+ });
 
 // Get all properties (admin only)
 router.get('/properties/all', verifyAdmin, async (req, res) => {
